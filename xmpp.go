@@ -63,6 +63,7 @@ type Conn struct {
 	in      *xml.Decoder
 	jid     string
 	archive bool
+	private bool
 
 	lock          sync.Mutex
 	inflights     map[Cookie]inflight
@@ -251,7 +252,11 @@ func (c *Conn) Send(to, msg string) error {
 		// http://xmpp.org/extensions/xep-0136.html#otr-nego
 		archive = "<nos:x xmlns:nos='google:nosave' value='enabled'/><arc:record xmlns:arc='http://jabber.org/protocol/archive' otr='require'/>"
 	}
-	_, err := fmt.Fprintf(c.out, "<message to='%s' from='%s' type='chat'><body>%s</body>%s</message>", xmlEscape(to), xmlEscape(c.jid), xmlEscape(msg), archive)
+	private := ""
+	if c.private {
+		private = "<private xmlns='urn:xmpp:carbons:2'/>"
+	}
+	_, err := fmt.Fprintf(c.out, "<message to='%s' from='%s' type='chat'><body>%s</body>%s</message>", xmlEscape(to), xmlEscape(c.jid), xmlEscape(msg), archive+private)
 	return err
 }
 
@@ -401,6 +406,10 @@ type Config struct {
 	// false, XML is sent with each message to disable recording on the
 	// server.
 	Archive bool
+	// Private determines if the message must be sent only to the
+	// recipient (if true) or also to Copy Carbon recipients (if false) as
+	// defined in XEP-280
+	Private bool
 	// ServerCertificateSHA256 contains the SHA-256 hash of the server's
 	// leaf certificate, or may be empty to use normal X.509 verification.
 	// If this is specified then normal X.509 verification is disabled.
@@ -454,6 +463,7 @@ func Dial(address, user, domain, password string, config *Config) (c *Conn, err 
 	c = new(Conn)
 	c.inflights = make(map[Cookie]inflight)
 	c.archive = config.Archive
+	c.private = config.Private
 
 	log := ioutil.Discard
 	if config != nil && config.Log != nil {
