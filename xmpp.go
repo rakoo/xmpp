@@ -61,7 +61,7 @@ type Conn struct {
 	out     io.Writer
 	rawOut  io.Writer // doesn't log. Used for <auth>
 	in      *xml.Decoder
-	jid     string
+	Jid     string
 	archive bool
 	private bool
 
@@ -132,7 +132,7 @@ func (c *Conn) Next() (stanza Stanza, err error) {
 				// then the matching is more complex because
 				// servers differ in how they construct the
 				// reply.
-				if len(iq.From) > 0 && iq.From != c.jid && iq.From != RemoveResourceFromJid(c.jid) && iq.From != domainFromJid(c.jid) {
+				if len(iq.From) > 0 && iq.From != c.Jid && iq.From != RemoveResourceFromJid(c.Jid) && iq.From != domainFromJid(c.Jid) {
 					continue
 				}
 			}
@@ -211,7 +211,7 @@ func (c *Conn) SendIQ(to, typ string, value interface{}) (reply chan Stanza, coo
 	if len(to) > 0 {
 		toAttr = "to='" + xmlEscape(to) + "'"
 	}
-	if _, err = fmt.Fprintf(c.out, "<iq %s from='%s' type='%s' id='%x'>", toAttr, xmlEscape(c.jid), xmlEscape(typ), cookie); err != nil {
+	if _, err = fmt.Fprintf(c.out, "<iq %s from='%s' type='%s' id='%x'>", toAttr, xmlEscape(c.Jid), xmlEscape(typ), cookie); err != nil {
 		return
 	}
 	if _, ok := value.(EmptyReply); !ok {
@@ -229,7 +229,7 @@ func (c *Conn) SendIQ(to, typ string, value interface{}) (reply chan Stanza, coo
 
 // SendIQReply sends a reply to an IQ query.
 func (c *Conn) SendIQReply(to, typ, id string, value interface{}) error {
-	if _, err := fmt.Fprintf(c.out, "<iq to='%s' from='%s' type='%s' id='%s'>", xmlEscape(to), xmlEscape(c.jid), xmlEscape(typ), xmlEscape(id)); err != nil {
+	if _, err := fmt.Fprintf(c.out, "<iq to='%s' from='%s' type='%s' id='%s'>", xmlEscape(to), xmlEscape(c.Jid), xmlEscape(typ), xmlEscape(id)); err != nil {
 		return err
 	}
 	if _, ok := value.(EmptyReply); !ok {
@@ -256,7 +256,7 @@ func (c *Conn) Send(to, msg string) error {
 	if c.private {
 		private = "<private xmlns='urn:xmpp:carbons:2'/>"
 	}
-	_, err := fmt.Fprintf(c.out, "<message to='%s' from='%s' type='chat'><body>%s</body>%s</message>", xmlEscape(to), xmlEscape(c.jid), xmlEscape(msg), archive+private)
+	_, err := fmt.Fprintf(c.out, "<message to='%s' from='%s' type='chat'><body>%s</body>%s</message>", xmlEscape(to), xmlEscape(c.Jid), xmlEscape(msg), archive+private)
 	return err
 }
 
@@ -629,7 +629,7 @@ func Dial(address, user, domain, password string, config *Config) (c *Conn, err 
 	if &iq.Bind == nil {
 		return nil, errors.New("<iq> result missing <bind>")
 	}
-	c.jid = iq.Bind.Jid // our local id
+	c.Jid = iq.Bind.Jid // our local id
 
 	if features.Session != nil {
 		// The server needs a session to be established. See RFC 3921,
