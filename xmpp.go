@@ -368,20 +368,6 @@ func certName(cert *x509.Certificate) string {
 	return ret
 }
 
-// Resolve performs a DNS SRV lookup for the XMPP server that serves the given
-// domain.
-func Resolve(domain string) (host string, port uint16, err error) {
-	_, addrs, err := net.LookupSRV("xmpp-client", "tcp", domain)
-	if err != nil {
-		return "", 0, err
-	}
-	if len(addrs) == 0 {
-		return "", 0, errors.New("xmpp: no SRV records found for " + domain)
-	}
-
-	return addrs[0].Target, addrs[0].Port, nil
-}
-
 // Config contains options for an XMPP connection.
 type Config struct {
 	// Conn is the connection to the server, if non-nill.
@@ -458,10 +444,33 @@ func printTLSDetails(w io.Writer, tlsState tls.ConnectionState) {
 }
 
 // Dial creates a new connection to an XMPP server, authenticates as the
-// given user.
-func Dial(address, user, domain, password string, config *Config) (c *Conn, err error) {
+// given user. The jid must be a bare jid (ie of the form user@domain)
+func Dial(jid, password string, config *Config) (c *Conn, err error) {
+
+	split := strings.Split(jid, "@")
+	if len(split) != 2 {
+		return nil, errors.New("Invalid jid")
+	}
+	user, domain := split[0], split[1]
+	if strings.Contains(split[1], "/") {
+		return nil, errors.New("Invalid jid")
+	}
+
+	_, addrs, err := net.LookupSRV("xmpp-client", "tcp", domain)
+	if err != nil {
+		return nil, err
+	}
+	if len(addrs) == 0 {
+		return nil, errors.New("xmpp: no SRV records found for " + domain)
+	}
+
+	address := addrs[0].Target + ":" + strconv.Itoa(int(addrs[0].Port))
+
 	c = new(Conn)
 	c.inflights = make(map[Cookie]inflight)
+	if config == nil {
+		config = &Config{}
+	}
 	c.archive = config.Archive
 	c.private = config.Private
 
