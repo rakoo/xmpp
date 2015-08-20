@@ -443,6 +443,41 @@ func printTLSDetails(w io.Writer, tlsState tls.ConnectionState) {
 	fmt.Fprintf(w, "  Cipher suite: %s\n", cipherSuite)
 }
 
+func DialAnon(domain string, config *Config) (c *Conn, err error) {
+	auther := func(c *Conn, log io.Writer, features streamFeatures) error {
+		io.WriteString(log, "Authenticating as ANONYMOUS\n")
+		haveAnon := false
+		for _, m := range features.Mechanisms.Mechanism {
+			if m == "ANONYMOUS" {
+				haveAnon = true
+				break
+			}
+		}
+		if !haveAnon {
+			return errors.New("xmpp: ANONYMOUS authentication is not an option")
+		}
+		fmt.Fprintf(c.rawOut, "<auth xmlns='%s' mechanism='ANONYMOUS'/>\n", NsSASL)
+
+		// Next message should be either success or failure.
+		name, val, err := next(c)
+		switch v := val.(type) {
+		case *saslSuccess:
+		case *saslFailure:
+			// v.Any is type of sub-element in failure,
+			// which gives a description of what failed.
+			return errors.New("xmpp: authentication failure: " + v.Any.Local)
+		default:
+			return errors.New("expected <success> or <failure>, got <" + name.Local + "> in " + name.Space)
+		}
+
+		if err == nil {
+			io.WriteString(log, "ANONYMOUS authentication successful\n")
+		}
+		return err
+	}
+	return dial(domain, nil, auther, config)
+}
+
 // Dial creates a new connection to an XMPP server, authenticates as the
 // given user. The jid must be a bare jid (ie of the form user@domain)
 func Dial(jid, password string, config *Config) (c *Conn, err error) {
