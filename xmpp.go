@@ -446,7 +446,6 @@ func printTLSDetails(w io.Writer, tlsState tls.ConnectionState) {
 // Dial creates a new connection to an XMPP server, authenticates as the
 // given user. The jid must be a bare jid (ie of the form user@domain)
 func Dial(jid, password string, config *Config) (c *Conn, err error) {
-
 	split := strings.Split(jid, "@")
 	if len(split) != 2 {
 		return nil, errors.New("Invalid jid")
@@ -456,15 +455,88 @@ func Dial(jid, password string, config *Config) (c *Conn, err error) {
 		return nil, errors.New("Invalid jid")
 	}
 
-	_, addrs, err := net.LookupSRV("xmpp-client", "tcp", domain)
-	if err != nil {
-		return nil, err
-	}
-	if len(addrs) == 0 {
-		return nil, errors.New("xmpp: no SRV records found for " + domain)
+	createUserer := func(c *Conn, log io.Writer) error {
+		if config != nil && config.CreateCallback != nil {
+			io.WriteString(log, "Attempting to create account\n")
+			fmt.Fprintf(c.out, "<iq type='get' id='create_1'><query xmlns='jabber:iq:register'/></iq>")
+			var iq ClientIQ
+			if err = c.in.DecodeElement(&iq, nil); err != nil {
+				return errors.New("unmarshal <iq>: " + err.Error())
+			}
+			if iq.Type != "result" {
+				return errors.New("xmpp: account creation failed")
+			}
+			var register RegisterQuery
+			if err := xml.NewDecoder(bytes.NewBuffer(iq.Query)).Decode(&register); err != nil {
+				return err
+			}
+
+			if len(register.Form.Type) > 0 {
+				reply, err := processForm(&register.Form, register.Datas, config.CreateCallback)
+				fmt.Fprintf(c.rawOut, "<iq type='set' id='create_2'><query xmlns='jabber:iq:register'>")
+				if err = xml.NewEncoder(c.rawOut).Encode(reply); err != nil {
+					return err
+				}
+				fmt.Fprintf(c.rawOut, "</query></iq>")
+			} else if register.Username != nil && register.Password != nil {
+				// Try the old-style registration.
+				fmt.Fprintf(c.rawOut, "<iq type='set' id='create_2'><query xmlns='jabber:iq:register'><username>%s</username><password>%s</password></query></iq>", user, password)
+			}
+			if err != nil {
+				return err
+			}
+			var iq2 ClientIQ
+			if err = c.in.DecodeElement(&iq2, nil); err != nil {
+				return errors.New("unmarshal <iq>: " + err.Error())
+			}
+			if iq2.Type == "error" {
+				return errors.New("xmpp: account creation failed")
+			}
+		}
+
+		return nil
 	}
 
-	address := addrs[0].Target + ":" + strconv.Itoa(int(addrs[0].Port))
+	auther := func(c *Conn, log io.Writer, features streamFeatures) error {
+		io.WriteString(log, "Authenticating as "+user+"\n")
+		if err := c.authenticate(features, user, password); err != nil {
+			return err
+		}
+		io.WriteString(log, "Authentication successful\n")
+		return nil
+	}
+
+	return dial(domain, createUserer, auther, config)
+}
+
+func dial(
+	domain string,
+	createUserer func(c *Conn, log io.Writer) error,
+	auther func(c *Conn, log io.Writer, features streamFeatures) error,
+	config *Config) (c *Conn, err error) {
+
+	var address string
+	isLoopback := false
+	directAddresses, err := net.LookupIP(domain)
+	if err == nil {
+		for _, addr := range directAddresses {
+			if addr.IsLoopback() {
+				isLoopback = true
+				address = addr.String() + ":5222"
+			}
+		}
+	}
+
+	if !isLoopback {
+		_, addrs, err := net.LookupSRV("xmpp-client", "tcp", domain)
+		if err != nil {
+			return nil, err
+		}
+		if len(addrs) == 0 {
+			return nil, errors.New("xmpp: no SRV records found for " + domain)
+		}
+		address = addrs[0].Target + ":" + strconv.Itoa(int(addrs[0].Port))
+	}
 
 	c = new(Conn)
 	c.inflights = make(map[Cookie]inflight)
@@ -581,50 +653,16 @@ func Dial(jid, password string, config *Config) (c *Conn, err error) {
 		c.rawOut = conn
 	}
 
-	if config != nil && config.CreateCallback != nil {
-		io.WriteString(log, "Attempting to create account\n")
-		fmt.Fprintf(c.out, "<iq type='get' id='create_1'><query xmlns='jabber:iq:register'/></iq>")
-		var iq ClientIQ
-		if err = c.in.DecodeElement(&iq, nil); err != nil {
-			return nil, errors.New("unmarshal <iq>: " + err.Error())
-		}
-		if iq.Type != "result" {
-			return nil, errors.New("xmpp: account creation failed")
-		}
-		var register RegisterQuery
-		if err := xml.NewDecoder(bytes.NewBuffer(iq.Query)).Decode(&register); err != nil {
+	if createUserer != nil {
+		if err := createUserer(c, log); err != nil {
 			return nil, err
-		}
-
-		if len(register.Form.Type) > 0 {
-			reply, err := processForm(&register.Form, register.Datas, config.CreateCallback)
-			fmt.Fprintf(c.rawOut, "<iq type='set' id='create_2'><query xmlns='jabber:iq:register'>")
-			if err = xml.NewEncoder(c.rawOut).Encode(reply); err != nil {
-				return nil, err
-			}
-			fmt.Fprintf(c.rawOut, "</query></iq>")
-		} else if register.Username != nil && register.Password != nil {
-			// Try the old-style registration.
-			fmt.Fprintf(c.rawOut, "<iq type='set' id='create_2'><query xmlns='jabber:iq:register'><username>%s</username><password>%s</password></query></iq>", user, password)
-		}
-		if err != nil {
-			return nil, err
-		}
-		var iq2 ClientIQ
-		if err = c.in.DecodeElement(&iq2, nil); err != nil {
-			return nil, errors.New("unmarshal <iq>: " + err.Error())
-		}
-		if iq2.Type == "error" {
-			return nil, errors.New("xmpp: account creation failed")
 		}
 	}
 
-	io.WriteString(log, "Authenticating as "+user+"\n")
-	if err := c.authenticate(features, user, password); err != nil {
+	if err := auther(c, log, features); err != nil {
 		return nil, err
-	}
-	io.WriteString(log, "Authentication successful\n")
 
+	}
 	if features, err = c.getFeatures(domain); err != nil {
 		return nil, err
 	}
