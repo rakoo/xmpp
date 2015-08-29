@@ -562,7 +562,7 @@ func dial(
 		}
 	}
 
-	if !isLoopback {
+	if !isLoopback && (config == nil || config.Conn == nil) {
 		_, addrs, err := net.LookupSRV("xmpp-client", "tcp", domain)
 		if err != nil {
 			return nil, err
