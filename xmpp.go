@@ -874,6 +874,8 @@ type ClientMessage struct {
 	Body    string `xml:"body"`
 	Thread  string `xml:"thread"`
 	Delay   *Delay `xml:"delay,omitempty"`
+
+	Any []byte `xml:",innerxml"`
 }
 
 type ClientText struct {
