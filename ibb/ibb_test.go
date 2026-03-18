@@ -21,6 +21,7 @@ import (
 
 var _ net.Listener = (*ibb.Listener)(nil)
 
+
 func TestSendSelf(t *testing.T) {
 	clientIBB := &ibb.Handler{}
 	serverIBB := &ibb.Handler{}
@@ -118,6 +119,106 @@ func TestSendSelf(t *testing.T) {
 		}
 	})
 	close(recv)
+}
+
+// Test we can be both a client and a server to ourself
+func TestSendSelfSameHandler(t *testing.T) {
+	ibbH := &ibb.Handler{}
+	clientM := mux.New(
+		stanza.NSClient,
+		ibb.Handle(ibbH),
+	)
+	serverM := mux.New(
+		stanza.NSClient,
+		ibb.Handle(ibbH),
+	)
+	s := xmpptest.NewClientServer(
+		xmpptest.ClientHandler(clientM),
+		xmpptest.ServerHandler(serverM),
+	)
+
+	const (
+		iqPayload  = "There are two spiritual dangers in not owning a farm."
+		msgPayload = "One is the danger of supposing that breakfast comes from the grocery, and the other that heat comes from the furnace."
+	)
+	recv := make(chan struct {
+		Got string
+		Err error
+	})
+
+	ln := ibbH.Listen(s.Server)
+	go func() {
+		result := struct {
+			Got string
+			Err error
+		}{}
+		for {
+			select {
+			case <-recv:
+				return
+			default:
+			}
+			serverConn, err := ln.Accept()
+			if err != nil {
+				result.Err = fmt.Errorf("error listening for conn: %w", err)
+				recv <- result
+				return
+			}
+			b, err := io.ReadAll(serverConn)
+			if err != nil {
+				result.Err = fmt.Errorf("error reading full payload: %w", err)
+				recv <- result
+				return
+			}
+			result.Got = string(b)
+			recv <- result
+		}
+	}()
+
+	t.Run("iq", func(t *testing.T) {
+		clientConn, err := ibbH.Open(context.Background(), s.Client, s.Server.LocalAddr())
+		if err != nil {
+			t.Fatalf("error opening connection: %v", err)
+		}
+		_, err = io.WriteString(clientConn, iqPayload)
+		if err != nil {
+			t.Fatalf("error writing string: %v", err)
+		}
+		err = clientConn.Close()
+		if err != nil {
+			t.Fatalf("error closing conn: %v", err)
+		}
+		got := <-recv
+		if got.Err != nil {
+			t.Fatal(err)
+		}
+		if got.Got != iqPayload {
+			t.Errorf("got wrong payload type: want=%q, got=%q", iqPayload, got.Got)
+		}
+	})
+	t.Run("msg", func(t *testing.T) {
+		clientConn, err := ibbH.OpenIQ(context.Background(), stanza.IQ{To: s.Server.LocalAddr()}, s.Client, false, 5, "1234")
+		if err != nil {
+			t.Fatalf("error opening connection: %v", err)
+		}
+		_, err = io.WriteString(clientConn, msgPayload)
+		if err != nil {
+			t.Fatalf("error writing string: %v", err)
+		}
+		err = clientConn.Close()
+		if err != nil {
+			t.Fatalf("error closing conn: %v", err)
+		}
+		got := <-recv
+		if got.Err != nil {
+			t.Fatal(err)
+		}
+		if got.Got != msgPayload {
+			t.Errorf("got wrong payload type: want=%q, got=%q", iqPayload, got.Got)
+		}
+	})
+	close(recv)
+
 }
 
 func TestBufferFull(t *testing.T) {

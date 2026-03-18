@@ -117,7 +117,7 @@ func (h *Handler) HandleIQ(iq stanza.IQ, t xmlstream.TokenReadEncoder, start *xm
 	case "close":
 		_, sid := attr.Get(start.Attr, "sid")
 
-		conn, ok := h.streams[sid]
+		conn, ok := h.streams["receive:"+sid]
 		if !ok {
 			_, err := xmlstream.Copy(t, iq.Error(stanza.Error{
 				Type:      stanza.Cancel,
@@ -176,7 +176,7 @@ func handleOpen(h *Handler, iq openIQ, e xmlstream.Encoder) error {
 		return err
 	}
 	conn := newConn(h, l.s, iq, true, MaxBufferSize)
-	h.addStream(iq.Open.SID, conn)
+	h.addStream("receive:"+iq.Open.SID, conn)
 
 	l.eLock.Lock()
 	defer l.eLock.Unlock()
@@ -196,7 +196,7 @@ type errorResponder interface {
 }
 
 func handlePayload(h *Handler, errResp errorResponder, p dataPayload, e xmlstream.Encoder) error {
-	conn, ok := h.streams[p.SID]
+	conn, ok := h.streams["receive:"+p.SID]
 	if !ok {
 		_, err := xmlstream.Copy(e, errResp.Error(stanza.Error{
 			Type:      stanza.Cancel,
@@ -298,23 +298,23 @@ func open(ctx context.Context, h *Handler, acked bool, s *xmpp.Session, start st
 	if err != nil {
 		return nil, err
 	}
-	h.addStream(sid, conn)
+	h.addStream("send:"+sid, conn)
 	return conn, nil
 }
 
-func (h *Handler) addStream(sid string, conn *Conn) {
+func (h *Handler) addStream(key string, conn *Conn) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
 	if h.streams == nil {
 		h.streams = make(map[string]*Conn)
 	}
-	h.streams[sid] = conn
+	h.streams[key] = conn
 }
 
-func (h *Handler) rmStream(sid string) {
+func (h *Handler) rmStream(key string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	delete(h.streams, sid)
+	delete(h.streams, key)
 }
