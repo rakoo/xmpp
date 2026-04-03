@@ -105,7 +105,9 @@ type Conn struct {
 	writeLock      sync.Mutex
 	readDeadline   time.Time
 	s              *xmpp.Session
-	writeBuf       *bufio.Writer
+	writeBuf       io.WriteCloser
+	flushWrite     func() error
+	size           int
 	seq            uint16
 	closed         bool
 	stanzaWriter   *stanzaWriter
@@ -130,18 +132,29 @@ func newConn(h *Handler, s *xmpp.Session, iq openIQ, recv bool, maxBufSize int) 
 		to:    to,
 		s:     s,
 	}
-	b64Writer := base64.NewEncoder(base64.StdEncoding, stanzaWrite)
 	blockSize := iq.Open.BlockSize
 	if blockSize == 0 {
 		blockSize = BlockSize
+	}
+	bufferedWriter := bufio.NewWriterSize(stanzaWrite, int(blockSize))
+	enc := base64.NewEncoder(base64.StdEncoding, bufferedWriter)
+
+	closeFlushFunc := func() error {
+		err := enc.Close()
+		if err != nil {
+			return err
+		}
+		return bufferedWriter.Flush()
 	}
 
 	return &Conn{
 		readBuf:        bytes.NewBuffer(make([]byte, 0, blockSize)),
 		readReady:      make(chan struct{}),
 		s:              s,
-		writeBuf:       bufio.NewWriterSize(b64Writer, int(blockSize)),
-		closeFlushFunc: b64Writer.Close,
+		writeBuf:       enc,
+		size:           bufferedWriter.Size(),
+		flushWrite:     bufferedWriter.Flush,
+		closeFlushFunc: closeFlushFunc,
 		handler:        h,
 		stanzaWriter:   stanzaWrite,
 		maxBufSize:     maxBufSize,
@@ -210,7 +223,7 @@ func (c *Conn) RemoteAddr() net.Addr {
 // Note that individual packets sent on the stream may be less than the block
 // size even if there is enough data to fill the block.
 func (c *Conn) Size() int {
-	return c.writeBuf.Size()
+	return c.size
 }
 
 // Flush writes any buffered data to the underlying io.Writer.
@@ -223,11 +236,11 @@ func (c *Conn) flush(t xmlstream.Encoder) error {
 	if t == nil {
 		c.writeLock.Lock()
 		defer c.writeLock.Unlock()
-		return c.writeBuf.Flush()
+		return c.flushWrite()
 	}
 
 	c.stanzaWriter.t = t
-	return c.writeBuf.Flush()
+	return c.flushWrite()
 }
 
 // Close closes the connection.
@@ -295,10 +308,10 @@ func (c *Conn) closeNoNotify(t xmlstream.Encoder) error {
 // If max is less than the block size it is ignored and the block size is used
 // instead.
 func (c *Conn) SetReadBuffer(max int) {
-	// c.writeBuf.Size() may look out of place here, but it's not about the write
+	// c.size may look out of place here, but it's not about the write
 	// buffer itself, it's just the initial block size we negotiated.
-	if max < c.writeBuf.Size() && max > 0 {
-		max = c.writeBuf.Size()
+	if max < c.size && max > 0 {
+		max = c.size
 	}
 	c.maxBufSize = max
 }
